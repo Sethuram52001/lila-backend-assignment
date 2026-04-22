@@ -1,27 +1,22 @@
 import { Client, Session, Socket, Match } from '@heroiclabs/nakama-js';
 
-// Nakama Client setup
-const client = new Client("defaultkey", "127.0.0.1", "7350");
-let useSSL = false;
-client.useSSL = useSSL;
+// Nakama Client setup — useSSL passed to constructor (readonly in newer nakama-js)
+const client = new Client("defaultkey", "127.0.0.1", "7350", false);
 
 export let nakamaSession: Session | null = null;
 export let nakamaSocket: Socket | null = null;
 export let currentMatch: Match | null = null;
 
 export const authenticate = async (username: string) => {
-    // We use device auth for simplicity to auto-login based on username
     nakamaSession = await client.authenticateDevice(username, true, username);
-    nakamaSocket = client.createSocket(useSSL, false);
+    nakamaSocket = client.createSocket(false, false);
     await nakamaSocket.connect(nakamaSession, true);
     return nakamaSession;
 };
 
 export const findMatch = async (): Promise<Match> => {
     if (!nakamaSocket) throw new Error("Socket not connected");
-    
-    // We can use the matchmaker or join a specific match
-    // For this simple example, we use the matchmaker
+
     return new Promise((resolve, reject) => {
         nakamaSocket!.onmatchmakermatched = async (matched) => {
             try {
@@ -32,7 +27,7 @@ export const findMatch = async (): Promise<Match> => {
                 reject(err);
             }
         };
-        
+
         // Add user to matchmaker: min 2, max 2
         nakamaSocket!.addMatchmaker("*", 2, 2, { "engine": "tictactoe" });
     });
@@ -53,4 +48,29 @@ export const sendMove = async (position: number) => {
 
 export const getUserId = () => {
     return nakamaSession?.user_id;
+};
+
+export interface LeaderboardEntry {
+    rank: number;
+    username: string;
+    score: number;
+    user_id: string;
+}
+
+export const getLeaderboard = async (): Promise<LeaderboardEntry[]> => {
+    if (!nakamaSession) return [];
+    try {
+        // nakama-js returns `payload` as an object when it's valid JSON.
+        // It may also be a string depending on client/version, so handle both.
+        const result = await client.rpc(nakamaSession, "get_leaderboard", {});
+        const payload: any = (result as any).payload;
+        const data =
+          payload && typeof payload === "object"
+            ? payload
+            : JSON.parse(payload ? String(payload) : '{"entries":[]}');
+        return (data.entries || []) as LeaderboardEntry[];
+    } catch (e) {
+        console.error("Failed to fetch leaderboard:", e);
+        return [];
+    }
 };

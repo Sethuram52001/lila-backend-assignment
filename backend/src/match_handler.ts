@@ -4,13 +4,17 @@ export interface GameState {
   player1: nkruntime.Presence | null;
   player2: nkruntime.Presence | null;
   currentPlayerTurn: 1 | 2;
-  winner: 1 | 2 | 3 | null; // null = in progress, 1 = player 1, 2 = player 2, 3 = draw
+  winner: 1 | 2 | 3 | null; // null = in progress, 1 = player1, 2 = player2, 3 = draw
+  turnDeadline: number;      // Unix ms when the current turn expires
 }
 
 const OP_CODES = {
   MOVE: 1,
   STATE_UPDATE: 2,
 };
+
+const TURN_TIMEOUT_MS = 30_000; // 30 seconds per turn
+const LEADERBOARD_ID = "tictactoe_wins";
 
 // Convert server-side camelCase Presence to client-friendly snake_case
 const serializePresence = (p: nkruntime.Presence | null) => {
@@ -25,6 +29,7 @@ const serializeState = (state: GameState): string => {
     player2: serializePresence(state.player2),
     currentPlayerTurn: state.currentPlayerTurn,
     winner: state.winner,
+    turnDeadline: state.turnDeadline,
   });
 };
 
@@ -46,7 +51,30 @@ const checkWin = (board: (number | null)[]): 1 | 2 | 3 | null => {
     return 3; // Draw
   }
 
-  return null; // Game continues
+  return null;
+};
+
+// Record leaderboard win for the winner (and optionally a loss for the loser)
+const recordLeaderboard = (
+  nk: nkruntime.Nakama,
+  logger: nkruntime.Logger,
+  winner: nkruntime.Presence | null,
+) => {
+  if (!winner) return;
+  try {
+    // Lazily create the leaderboard — DB not accessible during InitModule
+    try {
+      nk.leaderboardCreate(LEADERBOARD_ID, false);
+      logger.info("Leaderboard created successfully");
+    } catch (e) {
+      logger.info("Leaderboard already exists or creation failed: %s", e);
+    }
+    // Use default operator/expiry semantics; keep args minimal to avoid runtime binding pitfalls.
+    nk.leaderboardRecordWrite(LEADERBOARD_ID, winner.userId, winner.username, 1, 0);
+    logger.info("Recorded leaderboard win for user: %s", winner.username);
+  } catch (e) {
+    logger.error("Failed to write leaderboard record: %s", e);
+  }
 };
 
 export const matchInit: nkruntime.MatchInitFunction = (
@@ -62,11 +90,12 @@ export const matchInit: nkruntime.MatchInitFunction = (
     player2: null,
     currentPlayerTurn: 1,
     winner: null,
+    turnDeadline: Date.now() + TURN_TIMEOUT_MS,
   };
 
   return {
     state,
-    tickRate: 5, // 5 ticks per second is enough for tic-tac-toe
+    tickRate: 5, // 5 ticks per second
     label: "tictactoe"
   };
 };
@@ -82,7 +111,7 @@ export const matchJoinAttempt: nkruntime.MatchJoinAttemptFunction = (
     metadata: { [key: string]: any }
 ): { state: nkruntime.MatchState, accept: boolean, rejectMessage?: string } | null => {
   const gameState = state as GameState;
-  
+
   // Accept if lobby is not full
   const numPlayers = Object.keys(gameState.presences).length;
   if (numPlayers >= 2) {
@@ -112,16 +141,19 @@ export const matchJoin: nkruntime.MatchJoinFunction = (
     }
   }
 
-  // Ensure consistent player ordering by sorting on userId
+  // Consistent ordering: sort by userId so player1 is always the lexicographically smaller id
   if (gameState.player1 && gameState.player2 && gameState.player1.userId > gameState.player2.userId) {
     const temp = gameState.player1;
     gameState.player1 = gameState.player2;
     gameState.player2 = temp;
   }
 
-  // Broadcast state to let clients know someone joined
-  dispatcher.broadcastMessage(OP_CODES.STATE_UPDATE, serializeState(gameState));
+  // Start the turn timer once both players have joined
+  if (gameState.player1 && gameState.player2) {
+    gameState.turnDeadline = Date.now() + TURN_TIMEOUT_MS;
+  }
 
+  dispatcher.broadcastMessage(OP_CODES.STATE_UPDATE, serializeState(gameState));
   return { state: gameState };
 };
 
@@ -145,23 +177,22 @@ export const matchLeave: nkruntime.MatchLeaveFunction = (
         }
     }
 
-    // Usually if a player leaves in TicTacToe, the other player wins by default, or the game aborts.
-    // We'll just end the match effectively or broadcast.
     if (Object.keys(gameState.presences).length === 0) {
         return null; // Empty match, terminate
     }
 
-    // If one player remains and game was in progress, they win by forfeit.
+    // Forfeit: the player who stayed wins
     if (gameState.winner === null) {
       if (gameState.player1 && !gameState.player2) {
           gameState.winner = 1;
+          recordLeaderboard(nk, logger, gameState.player1);
       } else if (!gameState.player1 && gameState.player2) {
           gameState.winner = 2;
+          recordLeaderboard(nk, logger, gameState.player2);
       }
     }
 
     dispatcher.broadcastMessage(OP_CODES.STATE_UPDATE, serializeState(gameState));
-    
     return { state: gameState };
 };
 
@@ -177,47 +208,61 @@ export const matchLoop: nkruntime.MatchLoopFunction = (
     const gameState = state as GameState;
     let stateChanged = false;
 
-    // Process incoming messages
-    for (const message of messages) {
-        // We only care about moves if the game is active
-        if (message.opCode === OP_CODES.MOVE && gameState.winner === null) {
-            const senderUserId = message.sender.userId;
-            
-            // Check if it's sender's turn
-            let isPlayer1 = gameState.player1 && gameState.player1.userId === senderUserId;
-            let isPlayer2 = gameState.player2 && gameState.player2.userId === senderUserId;
+    // Only run game logic when both players are present
+    const bothPresent = gameState.player1 && gameState.player2;
 
-            if (
-                (isPlayer1 && gameState.currentPlayerTurn === 1) || 
-                (isPlayer2 && gameState.currentPlayerTurn === 2)
-            ) {
-                try {
-                    const data = JSON.parse(nk.binaryToString(message.data));
-                    const cellIndex = data.position;
-                    
-                    if (typeof cellIndex === 'number' && cellIndex >= 0 && cellIndex < 9) {
-                        // isValidMove
-                        if (gameState.board[cellIndex] === null) {
-                            gameState.board[cellIndex] = gameState.currentPlayerTurn;
-                            gameState.currentPlayerTurn = gameState.currentPlayerTurn === 1 ? 2 : 1;
-                            gameState.winner = checkWin(gameState.board);
-                            stateChanged = true;
+    if (bothPresent && gameState.winner === null) {
+        // --- Turn timeout ---
+        if (Date.now() > gameState.turnDeadline) {
+            // The current player forfeited their turn by timing out → other player wins
+            gameState.winner = gameState.currentPlayerTurn === 1 ? 2 : 1;
+            const winnerPresence = gameState.winner === 1 ? gameState.player1 : gameState.player2;
+            recordLeaderboard(nk, logger, winnerPresence);
+            stateChanged = true;
+        }
+
+        // --- Process moves ---
+        for (const message of messages) {
+            if (message.opCode === OP_CODES.MOVE && gameState.winner === null) {
+                const senderUserId = message.sender.userId;
+
+                const isPlayer1 = gameState.player1 && gameState.player1.userId === senderUserId;
+                const isPlayer2 = gameState.player2 && gameState.player2.userId === senderUserId;
+
+                if (
+                    (isPlayer1 && gameState.currentPlayerTurn === 1) ||
+                    (isPlayer2 && gameState.currentPlayerTurn === 2)
+                ) {
+                    try {
+                        const data = JSON.parse(nk.binaryToString(message.data));
+                        const cellIndex = data.position;
+
+                        if (typeof cellIndex === 'number' && cellIndex >= 0 && cellIndex < 9) {
+                            if (gameState.board[cellIndex] === null) {
+                                gameState.board[cellIndex] = gameState.currentPlayerTurn;
+                                gameState.currentPlayerTurn = gameState.currentPlayerTurn === 1 ? 2 : 1;
+                                gameState.winner = checkWin(gameState.board);
+                                // Reset turn timer after a valid move
+                                gameState.turnDeadline = Date.now() + TURN_TIMEOUT_MS;
+                                stateChanged = true;
+
+                                if (gameState.winner && gameState.winner !== 3) {
+                                    const winnerPresence = gameState.winner === 1 ? gameState.player1 : gameState.player2;
+                                    recordLeaderboard(nk, logger, winnerPresence);
+                                }
+                            }
                         }
+                    } catch (e) {
+                        logger.error("Failed to parse MOVE message: %s", e);
                     }
-                } catch (e) {
-                    logger.error(`Failed to parse MOVE message: ${e}`);
                 }
             }
         }
     }
 
-    // Auto terminate if game ended a few ticks ago
-    // For simplicity, we keep it alive for players to see result, but typically we'd end it.
-    // If we want to end, we could check if winner is not null and shut down after X ticks.
-    
-    // Terminate if no players
+    // Terminate if no players remain
     if (Object.keys(gameState.presences).length === 0) {
-        return null; 
+        return null;
     }
 
     if (stateChanged) {
