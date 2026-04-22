@@ -15,6 +15,7 @@ backend/local.yml
 
 # Docker data volumes
 backend/cockroach-data/
+backend/data/
 
 # OS & editor junk
 .DS_Store
