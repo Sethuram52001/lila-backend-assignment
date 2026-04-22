@@ -24,8 +24,7 @@ export const findMatch = async (): Promise<Match> => {
     return new Promise((resolve, reject) => {
         nakamaSocket!.onmatchmakermatched = async (matched) => {
             try {
-                // When using a matchmaker token, the matchId parameter must be undefined/null
-                const match = await nakamaSocket!.joinMatch(undefined, matched.token);
+                const match = await nakamaSocket!.joinMatch(matched.match_id, matched.token);
                 currentMatch = match;
                 resolve(match);
             } catch (err) {
