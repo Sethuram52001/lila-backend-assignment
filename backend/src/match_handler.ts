@@ -260,8 +260,8 @@ export const matchLoop: nkruntime.MatchLoopFunction = (
         }
     }
 
-    // Terminate if no players remain
-    if (Object.keys(gameState.presences).length === 0) {
+    // Terminate if no players remain, but give players 10 seconds (50 ticks) to initially connect
+    if (tick > 50 && Object.keys(gameState.presences).length === 0) {
         return null;
     }
 
