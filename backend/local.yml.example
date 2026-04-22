@@ -1,0 +1,13 @@
+logger:
+  level: "DEBUG"
+console:
+  port: 7351
+  username: "admin"
+  password: "your-secure-password-here"
+session:
+  encryption_key: "your-32-char-encryption-key-here"
+  token_expiry_sec: 7200
+runtime:
+  js_entrypoint: "build/index.js"
+  env:
+    - "hello=world"

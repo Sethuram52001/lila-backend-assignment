@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+backend/build/
+frontend/dist/
+frontend/.vite/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+backend/local.yml
+
+# Docker data volumes
+backend/cockroach-data/
+
+# OS & editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript cache
+*.tsbuildinfo
