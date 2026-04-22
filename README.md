@@ -111,24 +111,53 @@ This project is split into two environments: `backend/` and `frontend/`.
 
 ---
 
-## Deployment
+## Deployment Process Documentation (Zero-Cost Strategy)
 
-### Backend
-*Recommended: DigitalOcean Droplet, AWS EC2, or any Docker-capable VPS.*
+To achieve a **100% free** deployment, we recommend the following stack:
+- **Database:** Supabase (Free Managed PostgreSQL)
+- **Nakama Backend:** Render (Free Docker Web Service)
+- **Frontend:** Vercel or Netlify (Free Static Hosting)
 
-```bash
-cd backend
-docker build -t your-registry/nakama-tictactoe:latest .
-docker push your-registry/nakama-tictactoe:latest
-```
+### 1. Database (Supabase)
+Nakama officially supports PostgreSQL. We can use Supabase to host this for free.
+1. Create a free account at [Supabase](https://supabase.com).
+2. Create a new project and save the database password.
+3. Once provisioned, go to **Project Settings -> Database** and copy the Connection String (URI). 
+   - *Example: `postgres://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres`*
 
-On the VPS, run `docker-compose up` with a production `local.yml` — update the CockroachDB address, set a strong `encryption_key`, and expose port `7350` behind an Nginx reverse proxy with SSL (Let's Encrypt).
-
-### Frontend
-*Recommended: Vercel or Netlify.*
-
-1. In `frontend/src/nakama.ts`, update the client to point at your deployed backend:
-   ```ts
-   const client = new Client("your-server-key", "api.yourdomain.com", "443", true);
+### 2. Backend (Render)
+Render allows you to deploy Docker containers for free.
+1. Push your code to a GitHub repository.
+2. Go to [Render](https://render.com) and create a new **Web Service**.
+3. Connect your GitHub repository and select the `backend` directory as the Root Directory (if prompted).
+4. Select the **Docker** runtime.
+5. In the Render environment variables, configure the following:
+   - `DB_URL`: The Supabase connection string you copied earlier.
+   - `NAKAMA_PASSWORD`: A secure password for your Nakama developer console.
+6. **Important Dockerfile Adjustment for Render:**
+   Render exposes a single `PORT` environment variable. You may need to modify the `docker-compose.yml` or entrypoint in the Dockerfile to bind Nakama's API port to the Render-provided port, or use a customized startup script:
+   ```bash
+   # Add this to your Dockerfile to run migrations and start Nakama on the provided port
+   CMD /nakama/nakama migrate up --database.address $DB_URL && /nakama/nakama --database.address $DB_URL --socket.port $PORT
    ```
-2. Connect your repo to Vercel/Netlify, set framework to **Vite**, build command `npm run build`, output dir `dist/`.
+7. Click **Deploy**. Note: Render's free tier spins down after 15 minutes of inactivity, so the initial connection might take ~50 seconds to wake up.
+
+### 3. Frontend (Vercel)
+1. Go to [Vercel](https://vercel.com) and import your GitHub repository.
+2. Set the Root Directory to `frontend`.
+3. The framework should be automatically detected as **Vite**.
+4. Set an Environment Variable for your production backend URL (e.g., `VITE_NAKAMA_URL=your-render-app.onrender.com`).
+5. Update `frontend/src/nakama.ts` to use this variable dynamically:
+   ```ts
+   const host = import.meta.env.VITE_NAKAMA_URL || "127.0.0.1";
+   const port = import.meta.env.VITE_NAKAMA_URL ? "443" : "7350";
+   const useSSL = !!import.meta.env.VITE_NAKAMA_URL;
+   const client = new Client("defaultkey", host, port, useSSL);
+   ```
+6. Click **Deploy**. Vercel will build and host your game, providing you with a live URL.
+
+### Deliverables Checklist
+- [x] **Source code repository:** Managed via your GitHub.
+- [x] **Deployed Game URL:** Provided by Vercel upon deployment.
+- [x] **Deployed Nakama Server Endpoint:** Provided by Render upon deployment.
+- [x] **README Content:** Setup, Architecture, Config, Testing, and Deployment all covered above.

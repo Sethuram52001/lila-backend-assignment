@@ -1,7 +1,11 @@
 import { Client, Session, Socket, Match } from '@heroiclabs/nakama-js';
 
-// Nakama Client setup — useSSL passed to constructor (readonly in newer nakama-js)
-const client = new Client("defaultkey", "127.0.0.1", "7350", false);
+// Nakama Client setup — dynamically read from env for deployment
+const host = import.meta.env.VITE_NAKAMA_URL || "127.0.0.1";
+const port = import.meta.env.VITE_NAKAMA_URL ? "443" : "7350";
+const useSSL = !!import.meta.env.VITE_NAKAMA_URL;
+
+const client = new Client("defaultkey", host, port, useSSL);
 
 export let nakamaSession: Session | null = null;
 export let nakamaSocket: Socket | null = null;
