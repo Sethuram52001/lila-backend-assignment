@@ -13,7 +13,7 @@ export let currentMatch: Match | null = null;
 
 export const authenticate = async (username: string) => {
     nakamaSession = await client.authenticateDevice(username, true, username);
-    nakamaSocket = client.createSocket(false, false);
+    nakamaSocket = client.createSocket(useSSL, false);
     await nakamaSocket.connect(nakamaSession, true);
     return nakamaSession;
 };
