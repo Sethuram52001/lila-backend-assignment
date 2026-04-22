@@ -52,7 +52,8 @@ const rpcGetLeaderboard: nkruntime.RpcFunction = (
     try {
         // Create leaderboard lazily — nk DB calls fail during InitModule, so we do it here
         try {
-            nk.leaderboardCreate(LEADERBOARD_ID, false);
+            // Use string literals directly — rollup miscompiles const enums
+            nk.leaderboardCreate(LEADERBOARD_ID, false, "descending" as nkruntime.SortOrder, "increment" as nkruntime.Operator);
             logger.info("Leaderboard created successfully");
         } catch (e) {
             logger.info("Leaderboard already exists or creation failed: %s", e);

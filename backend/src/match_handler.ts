@@ -64,8 +64,8 @@ const recordLeaderboard = (
   try {
     // Lazily create the leaderboard — DB not accessible during InitModule
     try {
-      nk.leaderboardCreate(LEADERBOARD_ID, false);
-      logger.info("Leaderboard created successfully");
+      // Use string literals directly — rollup miscompiles const enums
+      nk.leaderboardCreate(LEADERBOARD_ID, false, "descending" as nkruntime.SortOrder, "increment" as nkruntime.Operator);
     } catch (e) {
       logger.info("Leaderboard already exists or creation failed: %s", e);
     }
